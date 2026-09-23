@@ -1,0 +1,9 @@
+motion_node:
+  ros__parameters:
+    Motion:
+      # 接管 rt/joint_ctrl 前必须显式开启；默认只运行模型和日志，不输出关节命令。
+      enabled: false
+      walk_model: /opt/booster/Gait/bin/lib/exported_policy_k1.bin
+      # 下标 0 对应 KickRequest.model_slot=0。增加实验模型时只在此追加路径。
+      kick_models:
+        - /opt/booster/Gait/bin/lib/k1_kick_policy_138_v1.bin

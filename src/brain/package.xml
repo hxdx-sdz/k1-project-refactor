@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>brain</name>
+  <version>0.1.0</version>
+  <description>K1 input ports and module dataflow.</description>
+  <maintainer email="lishuai@todo.todo">lishuai</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>booster_interface</depend>
+  <depend>booster_msgs</depend>
+  <depend>game_controller_interface</depend>
+  <depend>vision_interface</depend>
+  <depend>geometry_msgs</depend>
+  <depend>motion</depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

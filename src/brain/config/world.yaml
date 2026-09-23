@@ -1,0 +1,68 @@
+brain_node:
+  ros__parameters:
+    # 按模块名分组
+    SelfState:
+      odom_factor: 1.2
+
+    Observations:
+      # 用于投影位置的俯仰角
+      robot_height: 0.9
+
+    FieldProvider:
+      # 临时 14x11 场地；其他尺寸参照原版 Demo adult_size。
+      field: # 米
+        length: 14.0
+        width: 11.0
+        penalty_distance: 2.242 # 罚球点到底线距离
+        goal_width: 2.6
+        circle_radius: 1.54
+        penalty_area_length: 3.24
+        penalty_area_width: 6.192
+        goal_area_length: 1.345
+        goal_area_width: 4.0
+
+    Localization:
+      # 已有位姿后的局部校正搜索半宽；首次全局定位不依赖这组值。
+      search_range:
+        x: 1.0
+        y: 1.0
+        yaw: 0.7853981633974483
+      min_markers: 4
+      residual_tolerance: 0.4
+      # 全局定位出现镜像候选时，残差在此范围内优先沿用当前位姿所在的一侧。
+      global_candidate_margin: 0.1
+      input_timeout: 1.0
+      correction_interval: 0.5
+      # HTWK 场线候选只接收不短于此值的机器人坐标系线段。
+      line_min_length: 0.2
+
+    BallState:
+      min_confidence: 50.0
+      input_timeout: 0.3
+      # 新视觉位置以此比例混入；短暂漏检仍沿用最后一份可靠球状态。
+      position_smoothing: 0.35
+      hold_duration: 0.3
+      # 首次看到球不立刻进入视觉踢球，连续看到两帧后才确认。
+      confirm_frames: 2
+
+    FieldPotential:
+      # 只描述场地偏好：边界推回场内、球门吸引、对方底线角落回退。
+      border_range: 0.8
+      border_weight: 3.0
+      goal_weight: 1.5
+      corner_weight: 0.5
+
+    Strategy:
+      # 看到球立即进入 Visual Kick；短暂漏检时不退出，避免动作模式反复切换。
+      visual_kick_exit_delay: 1.0
+      # 退出后需等待一小段时间才能再次进入，给底层动作控制器稳定退出的窗口。
+      visual_kick_exit_cooldown: 2.0
+
+    Skill:
+      local_ball_hold: 2.0
+      search_turn: 0.4
+
+    Rerun:
+      # 与原版 Demo 一样，主动连接开发电脑上已启动的 Rerun Viewer。
+      enable_tcp: true
+      server_ip: "192.168.50.113:9876"
