@@ -81,7 +81,7 @@ private:
     BallStateModule ball_{observations_.output, frame_.now};
     FieldPotentialModule fieldPotential_{field_.output, localization_.output, ball_.output};
     StrategyModule strategy_{ball_.output, frame_.now};
-    SkillModule skill_{strategy_.output, ball_.output, field_.output, localization_.output,
+    SkillModule skill_{strategy_.output, ball_.output, localization_.output,
                        fieldPotential_.output, self_.output, frame_.now};
     ActuationModule actuation_{skill_.head, skill_.motion, skill_.kick};
     RerunModule rerun_{field_.output, self_.output, observations_.output,

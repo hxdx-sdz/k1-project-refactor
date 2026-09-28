@@ -2,7 +2,6 @@
 
 #include "modules/ball_state.hpp"
 #include "modules/field_potential.hpp"
-#include "modules/field_provider.hpp"
 #include "modules/localization.hpp"
 #include "modules/strategy.hpp"
 #include "modules/self_state.hpp"
@@ -30,13 +29,16 @@ struct HeadRequest {
 };
 
 struct MotionRequest {
+    // -1 表示交给 Motion 的默认路由；非负值明确指定 walk_models 的下标。
+    int walkSlot = -1;
     double forward = 0;
     double left = 0;
     double turn = 0;
 
     string detail() const {
         ostringstream out;
-        out << fixed << setprecision(2) << "forward=" << forward
+        out << fixed << setprecision(2) << "slot=" << walkSlot
+            << " forward=" << forward
             << " left=" << left << "\nturn=" << turn;
         return out.str();
     }
@@ -45,11 +47,8 @@ struct MotionRequest {
 struct KickRequest {
     bool active = false;
     unsigned modelSlot = 0;
-    bool ballUpdated = false;
     double x = 0, y = 0;
     double direction = 0;
-    double goalX = 0, goalY = 0;
-    double robotYawToField = 0;
     double power = 2;
 
     string detail() const {
@@ -72,10 +71,10 @@ public:
         double searchTurn = 0.4;
     };
 
-    SkillModule(const Strategy& strategy, const BallState& ball, const FieldModel& field,
+    SkillModule(const Strategy& strategy, const BallState& ball,
                 const LocalizationState& localization, const FieldPotential& potential,
                 const SelfState& self, const double& now)
-        : strategy_(strategy), ball_(ball), field_(field), localization_(localization),
+        : strategy_(strategy), ball_(ball), localization_(localization),
           potential_(potential), self_(self), now_(now) {}
 
     HeadRequest head;
@@ -83,7 +82,7 @@ public:
     KickRequest kick;
 
     ModuleInfo info() const override {
-        return {"Skill", {"Strategy", "BallState", "FieldModel", "LocalizationState",
+        return {"Skill", {"Strategy", "BallState", "LocalizationState",
                            "FieldPotential", "SelfState", "FrameTime"},
                 {"HeadRequest", "MotionRequest", "KickRequest"}};
     }
@@ -101,17 +100,10 @@ public:
         kick.active = strategy_.skill == Strategy::VisualKick && potential_.valid;
         if(kick.active) {
             kick.modelSlot = 0;
-            kick.ballUpdated = ball_.detectionRevision != lastKickDetectionRevision_;
-            lastKickDetectionRevision_ = ball_.detectionRevision;
             // Potential 给出的是场地坐标系中的出球方向；踢球接口需要机器人坐标系。
             kick.x = ball_.ball.relative.x;
             kick.y = ball_.ball.relative.y;
             kick.direction = wrapAngle(potential_.directionToField - localization_.poseToField.yaw);
-            const Pose2D goal = compose(inverse(localization_.poseToField),
-                                        {field_.dimensions.length / 2, 0, 0});
-            kick.goalX = goal.x;
-            kick.goalY = goal.y;
-            kick.robotYawToField = localization_.poseToField.yaw;
             kick.power = 2;
         }
     }
@@ -126,8 +118,6 @@ private:
         double targetPitch = 0.4, targetYaw = 0;
         double commandedPitch = 0.4, commandedYaw = 0;
     } headState_;
-    uint64_t lastKickDetectionRevision_ = 0;
-
     static double smooth(double current, double target, double dt, double tau) {
         if(dt <= 0) return current;
         const double alpha = 1 - exp(-dt / tau);
@@ -225,7 +215,6 @@ private:
 
     const Strategy& strategy_;
     const BallState& ball_;
-    const FieldModel& field_;
     const LocalizationState& localization_;
     const FieldPotential& potential_;
     const SelfState& self_;

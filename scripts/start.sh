@@ -4,6 +4,7 @@ cd `dirname $0`
 cd ..
 WORKSPACE_ROOT=$(pwd)
 VISION_CONFIG_PATH="${WORKSPACE_ROOT}/src/vision/config"
+MOTION_CONFIG_PATH="${WORKSPACE_ROOT}/src/motion/config/motion.yaml"
 
 echo "[STOP EXISTING NODES (IF ANY), TO AVOID CONFILICT]"
 sudo killall -9 booster-video-stream
@@ -33,7 +34,7 @@ nohup ros2 launch vision launch.py vision_config_path:=/opt/booster save_data:=t
 # nohup ros2 run ros2_sync_package sync_node > sync_node.log 2>&1 &
 # nohup sh src/vision_segmentation/run.sh > vision_segmentation.log 2>&1 &
 echo "[START BRAIN]"
-nohup ros2 launch brain launch.py vision_config_path:=/opt/booster "$@" > brain.log 2>&1 &
+nohup ros2 launch brain launch.py motion_config:="${MOTION_CONFIG_PATH}" "$@" > brain.log 2>&1 &
 # nohup ros2 launch brain launch.py "$@"  > brain.log 2>&1 &
 echo "[START GAME_CONTROLLER]"
 nohup ros2 launch game_controller launch.py > game_controller.log 2>&1 &

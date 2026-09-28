@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(brain)
 
+# colcon 的单配置构建未指定类型时默认为空，等价于不优化。
+# Brain 与 Motion 统一使用 Release；需要调试时由命令行显式指定。
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(booster_interface REQUIRED)

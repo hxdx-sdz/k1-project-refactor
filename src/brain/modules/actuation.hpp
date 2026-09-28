@@ -48,6 +48,7 @@ public:
         headPublisher_->publish(head);
 
         motion::msg::MoveRequest move;
+        move.walk_slot = motion_.walkSlot;
         move.forward = motion_.forward;
         move.left = motion_.left;
         move.turn = motion_.turn;
@@ -56,13 +57,9 @@ public:
         motion::msg::KickRequest kick;
         kick.active = kick_.active;
         kick.model_slot = kick_.modelSlot;
-        kick.ball_updated = kick_.ballUpdated;
         kick.x = kick_.x;
         kick.y = kick_.y;
         kick.direction = kick_.direction;
-        kick.goal_x = kick_.goalX;
-        kick.goal_y = kick_.goalY;
-        kick.robot_theta_to_field = kick_.robotYawToField;
         kick.power = kick_.power;
         kickPublisher_->publish(kick);
 
