@@ -3,6 +3,7 @@
 #include "common/module.h"
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 #include <vector>
 
 namespace brain {
@@ -19,8 +20,7 @@ struct FieldLine {
 };
 
 struct FieldModel {
-    // 临时 14x11 场地；其他尺寸沿用原 Demo adult_size 的定义量级。
-    FieldDimensions dimensions = {14, 11, 2.242, 2.6, 1.54, 3.24, 6.192, 1.345, 4};
+    FieldDimensions dimensions = {9, 6, 1.5, 2.6, 0.75, 2, 4, 1, 3};
     vector<FieldLine> lines;
 
     string detail() const {
@@ -42,23 +42,24 @@ public:
     }
 
     void configure(rclcpp::Node& node) override {
-        FieldDimensions& f = output.dimensions;
-        f.length = node.declare_parameter<double>("FieldProvider.field.length", f.length);
-        f.width = node.declare_parameter<double>("FieldProvider.field.width", f.width);
-        f.penaltyDist = node.declare_parameter<double>("FieldProvider.field.penalty_distance", f.penaltyDist);
-        f.goalWidth = node.declare_parameter<double>("FieldProvider.field.goal_width", f.goalWidth);
-        f.circleRadius = node.declare_parameter<double>("FieldProvider.field.circle_radius", f.circleRadius);
-        f.penaltyAreaLength = node.declare_parameter<double>("FieldProvider.field.penalty_area_length", f.penaltyAreaLength);
-        f.penaltyAreaWidth = node.declare_parameter<double>("FieldProvider.field.penalty_area_width", f.penaltyAreaWidth);
-        f.goalAreaLength = node.declare_parameter<double>("FieldProvider.field.goal_area_length", f.goalAreaLength);
-        f.goalAreaWidth = node.declare_parameter<double>("FieldProvider.field.goal_area_width", f.goalAreaWidth);
-
+        string size = node.declare_parameter<string>("FieldProvider.field_size", "kid_size");
+        output.dimensions = dimensionsFor(size);
         makeLines();
     }
 
     void run() override {}
 
 private:
+    FieldDimensions dimensionsFor(const string& size) {
+        if(size == "kid_size")
+            return {9, 6, 1.5, 2.6, 0.75, 2, 4, 1, 3};
+        if(size == "adult_size")
+            return {14, 9, 2, 2.6, 1.5, 3, 6, 1, 4};
+        if(size == "robo_league")
+            return {22, 14, 2.5, 2.6, 2, 3.5, 7, 1, 5};
+        throw invalid_argument("FieldProvider.field_size must be kid_size, adult_size, or robo_league");
+    }
+
     void makeLines() {
         const FieldDimensions& f = output.dimensions;
         output.lines.clear();

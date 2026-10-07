@@ -56,6 +56,7 @@ public:
         int minMarkers = 4;
         double residualTolerance = 0.4;
         double inputTimeout = 1.0, correctionInterval = 0.5;
+        bool lineCorrection = false;
         double lineMinLength = 0.2;
         // 全局候选的单点平均残差相差不大时，优先沿用已有位姿所在的一侧。
         double globalCandidateMargin = 0.1;
@@ -69,6 +70,8 @@ public:
         config_.residualTolerance = node.declare_parameter<double>("Localization.residual_tolerance", config_.residualTolerance);
         config_.inputTimeout = node.declare_parameter<double>("Localization.input_timeout", config_.inputTimeout);
         config_.correctionInterval = node.declare_parameter<double>("Localization.correction_interval", config_.correctionInterval);
+        config_.lineCorrection = node.declare_parameter<bool>(
+            "Localization.line_correction", config_.lineCorrection);
         config_.lineMinLength = node.declare_parameter<double>(
             "Localization.line_min_length", config_.lineMinLength);
         config_.globalCandidateMargin = node.declare_parameter<double>(
@@ -100,7 +103,7 @@ public:
         }
         const bool markersFresh = observations.detectionRevision
             && now - observations.receivedAt <= config.inputTimeout;
-        const bool linesFresh = observations.lineRevision
+        const bool linesFresh = config.lineCorrection && observations.lineRevision
             && now - observations.linesReceivedAt <= config.inputTimeout;
         if(markersFresh && observations.detectionRevision != usedDetection_ && now >= nextAttempt_) {
             usedDetection_ = observations.detectionRevision;

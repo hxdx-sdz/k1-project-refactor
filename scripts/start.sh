@@ -35,6 +35,15 @@ nohup ros2 launch vision launch.py vision_config_path:=/opt/booster save_data:=t
 # nohup sh src/vision_segmentation/run.sh > vision_segmentation.log 2>&1 &
 echo "[START BRAIN]"
 nohup ros2 launch brain launch.py motion_config:="${MOTION_CONFIG_PATH}" "$@" > brain.log 2>&1 &
+# Motion 由 launch 异步启动，等进程出现后再提高调度优先级。
+for attempt in {1..20}; do
+    motion_pids=$(pgrep -x motion_node)
+    if [ -n "$motion_pids" ]; then
+        sudo -n renice -n -10 -p $motion_pids
+        break
+    fi
+    sleep 0.5
+done
 # nohup ros2 launch brain launch.py "$@"  > brain.log 2>&1 &
 echo "[START GAME_CONTROLLER]"
 nohup ros2 launch game_controller launch.py > game_controller.log 2>&1 &

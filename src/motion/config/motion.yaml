@@ -14,6 +14,12 @@ motion_node:
       left_deceleration: 1.2
       turn_acceleration: 2.0
       turn_deceleration: 2.0
+      # 踢球模型的球位补偿 [x, y]，单位米；本体坐标 +x 向前、+y 向左。
+      kick_ball_offset: [0.0, 0.0]
+      # 下标 0 是普通走路；VisualKick 请求 odom_slot=1。
+      odom_models:
+        - K1_odom_model_20260128_152713
+        - K1_odom_model_visionkick
       # 下标由 MoveRequest.walk_slot 指定；-1 使用 turn/walk 的默认路由。
       walk_models:
         - exported_policy_k1.bin

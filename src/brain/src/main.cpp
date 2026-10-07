@@ -49,9 +49,9 @@ public:
         if(playerId_ < 1) throw invalid_argument("player_id must be positive");
         brain_.init(*this);
 
-        // 里程计：机器人相对里程计原点的平面位置和朝向
+        // Motion 的里程计：机器人相对启动原点的平面位置和朝向。
         odometrySub_ = create_subscription<booster_interface::msg::Odometer>(
-            "/odometer_state", 1,
+            "/motion/odometer", 1,
             [this](const booster_interface::msg::Odometer::SharedPtr msg) {
                 if(!isfinite(msg->x) || !isfinite(msg->y) || !isfinite(msg->theta)) return;
                 brain::Odometry value;

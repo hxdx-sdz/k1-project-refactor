@@ -9,17 +9,8 @@ brain_node:
       robot_height: 0.9
 
     FieldProvider:
-      # 临时 14x11 场地；其他尺寸参照原版 Demo adult_size。
-      field: # 米
-        length: 14.0
-        width: 11.0
-        penalty_distance: 2.242 # 罚球点到底线距离
-        goal_width: 2.6
-        circle_radius: 1.54
-        penalty_area_length: 3.24
-        penalty_area_width: 6.192
-        goal_area_length: 1.345
-        goal_area_width: 4.0
+      # 可选 kid_size、adult_size、robo_league；几何定义由 FieldProvider 统一维护。
+      field_size: kid_size
 
     Localization:
       # 已有位姿后的局部校正搜索半宽；首次全局定位不依赖这组值。
@@ -33,7 +24,9 @@ brain_node:
       global_candidate_margin: 0.1
       input_timeout: 1.0
       correction_interval: 0.5
-      # HTWK 场线候选只接收不短于此值的机器人坐标系线段。
+      # 场线定位当前停用：只保留视觉观测，暂不让它校正位姿。
+      line_correction: false
+      # 启用场线定位后，只接收不短于此值的机器人坐标系线段。
       line_min_length: 0.2
 
     BallState:

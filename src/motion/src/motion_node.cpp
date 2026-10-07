@@ -1,8 +1,10 @@
 #include "motion/policy.hpp"
+#include "motion/odom.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <booster_interface/message_utils.hpp>
 #include <booster_interface/msg/low_cmd.hpp>
 #include <booster_interface/msg/low_state.hpp>
+#include <booster_interface/msg/odometer.hpp>
 #include <booster_interface/msg/remote_controller_state.hpp>
 #include <booster_msgs/msg/rpc_req_msg.hpp>
 #include <motion/msg/head_request.hpp>
@@ -28,7 +30,7 @@ const int kControlIntervalMs = 2;
 const int kPolicyControlSteps = 10;
 const int kBrainMoveTimeoutMs = 250;
 const int kDefaultWalkSlot = -1;
-const int kTurnWalkSlot = -2;
+const double kPi = 3.14159265358979323846;
 
 // 模型实验室顺序到 K1 serial 关节顺序的映射。头部在 0/1，模型控制 2..21。
 const int kRuntimeToLab[kPolicyJointCount] = {
@@ -65,12 +67,52 @@ struct PolicyContext {
     }
 };
 
+// 每秒汇总一次，保留平均值和最坏值，避免高频日志影响控制时序。
+struct TimingSample {
+    unsigned count = 0;
+    double total = 0;
+    double maximum = 0;
+
+    void add(double value) {
+        ++count;
+        total += value;
+        maximum = max(maximum, value);
+    }
+
+    double average() const { return count ? total / count : 0; }
+};
+
+struct MotionTiming {
+    typedef chrono::steady_clock Clock;
+    typedef Clock::time_point Time;
+
+    TimingSample tickGap, tickWork, inference;
+    Time lastTick;
+    Time lastReport = Clock::now();
+    unsigned lateTicks = 0;
+    unsigned slowTicks = 0;
+
+    static double elapsed(const Time& start, const Time& end) {
+        return chrono::duration<double, micro>(end - start).count();
+    }
+
+    static void gap(TimingSample& sample, Time& previous, const Time& now) {
+        if(previous != Time()) sample.add(elapsed(previous, now));
+        previous = now;
+    }
+
+    void clearSamples() {
+        tickGap = tickWork = inference = TimingSample();
+        lateTicks = slowTicks = 0;
+    }
+};
+
 }
 
 class MotionNode : public rclcpp::Node {
 public:
     MotionNode()
-        : Node("motion_node"), turn_(69), target_(defaultPose()) {
+        : Node("motion_node"), target_(defaultPose()) {
         config_.enabled = declare_parameter<bool>("Motion.enabled", false);
         config_.maxForward = declare_parameter<double>("Motion.max_forward", 1.25);
         config_.maxBackward = declare_parameter<double>("Motion.max_backward", 0.5);
@@ -82,11 +124,18 @@ public:
         config_.leftDeceleration = declare_parameter<double>("Motion.left_deceleration", 1.2);
         config_.turnAcceleration = declare_parameter<double>("Motion.turn_acceleration", 2.0);
         config_.turnDeceleration = declare_parameter<double>("Motion.turn_deceleration", 2.0);
+        config_.kickBallOffset = declare_parameter<vector<double> >("Motion.kick_ball_offset", {0.0, 0.0});
+        if(config_.kickBallOffset.size() != 2)
+            throw invalid_argument("Motion.kick_ball_offset needs [x, y]");
+        config_.odomPaths = declare_parameter<vector<string> >(
+            "Motion.odom_models", {"K1_odom_model_20260128_152713", "K1_odom_model_visionkick"});
         config_.walkPaths = declare_parameter<vector<string> >("Motion.walk_models", vector<string>());
         config_.turnPath = declare_parameter<string>("Motion.turn_model", "");
         config_.kickPaths = declare_parameter<vector<string> >("Motion.kick_models", vector<string>());
 
-        for(size_t i = 0; i < config_.walkPaths.size(); ++i) walkPolicies_.push_back(PolicyContext(69));
+        for(size_t i = 0; i < config_.odomPaths.size(); ++i)
+            odomModels_.push_back(motion::OdomModel(motion::k1Odom20260128Calibration()));
+        walkPolicies_.resize(config_.walkPaths.size());
         for(size_t i = 0; i < config_.kickPaths.size(); ++i) kickPolicies_.push_back(PolicyContext(71));
         loadModels();
 
@@ -109,12 +158,40 @@ public:
             "/remote_controller_state", 1,
             [this](const booster_interface::msg::RemoteControllerState::SharedPtr msg) { controller(*msg); });
         jointPublisher_ = create_publisher<booster_interface::msg::LowCmd>("/joint_ctrl", 1);
+        odomPublisher_ = create_publisher<booster_interface::msg::Odometer>("/motion/odometer", 1);
         modePublisher_ = create_publisher<booster_msgs::msg::RpcReqMsg>("LocoApiTopicReq", 1);
-        timer_ = create_wall_timer(chrono::milliseconds(kControlIntervalMs), [this]() { tick(); });
+        timer_ = create_wall_timer(chrono::milliseconds(kControlIntervalMs), [this]() {
+            const MotionTiming::Time start = MotionTiming::Clock::now();
+            if(timing_.lastTick != MotionTiming::Time()
+               && MotionTiming::elapsed(timing_.lastTick, start) > 3000) ++timing_.lateTicks;
+            MotionTiming::gap(timing_.tickGap, timing_.lastTick, start);
+            tick();
+            const double work = MotionTiming::elapsed(start, MotionTiming::Clock::now());
+            timing_.tickWork.add(work);
+            if(work > 2000) ++timing_.slowTicks;
+            reportTiming();
+        });
     }
 
 private:
     enum ControllerMode { Idle, CustomReady, Running };
+
+    MotionTiming timing_;
+
+    void reportTiming() {
+        const MotionTiming::Time now = MotionTiming::Clock::now();
+        const double seconds = MotionTiming::elapsed(timing_.lastReport, now) / 1000000;
+        if(seconds < 1) return;
+        if(runtime_.mode == Running)
+            RCLCPP_INFO(get_logger(),
+                "timing: tick=%.2f/%.2fms late(>3ms)=%u work=%.2f/%.2fms slow(>2ms)=%u infer=%.2f/%.2fms",
+                timing_.tickGap.average() / 1000, timing_.tickGap.maximum / 1000,
+                timing_.lateTicks, timing_.tickWork.average() / 1000,
+                timing_.tickWork.maximum / 1000, timing_.slowTicks,
+                timing_.inference.average() / 1000, timing_.inference.maximum / 1000);
+        timing_.lastReport = now;
+        timing_.clearSamples();
+    }
 
     // 配置只由 YAML 决定；运行中不改变。
     struct MotionConfig {
@@ -129,6 +206,8 @@ private:
         double leftDeceleration;
         double turnAcceleration;
         double turnDeceleration;
+        vector<double> kickBallOffset;
+        vector<string> odomPaths;
         vector<string> walkPaths;
         string turnPath;
         vector<string> kickPaths;
@@ -170,7 +249,6 @@ private:
         ControllerMode mode = Idle;
         bool hasLowState = false;
         bool manualControl = false;
-        int activeWalkSlot = -3;
         int activeKickSlot = -1;
         unsigned controlSteps = 0;
         uint64_t requestSequence = 0;
@@ -178,6 +256,22 @@ private:
 
     // 这是模型实际看到的速度命令。它只负责让输入连续，不承担策略判断。
     motion::msg::MoveRequest appliedMove_;
+
+    // 所有 walk 模型看到同一段运动过程；切换模型不重置历史或上一帧动作。
+    struct WalkObservation {
+        motion::History history{69};
+        Eigen::VectorXd lastAction = Eigen::VectorXd::Zero(kPolicyJointCount);
+
+        void reset() {
+            history.clear();
+            lastAction.setZero();
+        }
+    } walkObservation_;
+
+    struct OdomState {
+        motion::OdomObservation observation;
+        Eigen::Vector2d position = Eigen::Vector2d::Zero();
+    } odomState_;
 
 
     struct GainProfile {
@@ -195,13 +289,21 @@ private:
     };
 
     void loadModels() {
+        int odomHistorySize = 0;
+        for(size_t i = 0; i < odomModels_.size(); ++i) {
+            const string path = modelPath(config_.odomPaths[i]);
+            odomModels_[i].load(path);
+            odomHistorySize = max(odomHistorySize, odomModels_[i].historySize());
+            RCLCPP_INFO(get_logger(), "loaded odom slot %zu: %s", i, path.c_str());
+        }
+        odomState_.observation.init(odomHistorySize);
         walkReady_.assign(walkPolicies_.size(), false);
         for(size_t i = 0; i < walkPolicies_.size(); ++i) {
             try {
                 const string path = modelPath(config_.walkPaths[i]);
-                walkPolicies_[i].policy.load(path);
-                if(walkPolicies_[i].policy.inputSize() != 69 * kHistorySize
-                   || walkPolicies_[i].policy.outputSize() != kPolicyJointCount)
+                walkPolicies_[i].load(path);
+                if(walkPolicies_[i].inputSize() != 69 * kHistorySize
+                   || walkPolicies_[i].outputSize() != kPolicyJointCount)
                     throw runtime_error("walk policy must be 690 -> 20");
                 walkReady_[i] = true;
                 RCLCPP_INFO(get_logger(), "loaded walk slot %zu: %s", i, path.c_str());
@@ -212,8 +314,8 @@ private:
 
         try {
             const string path = modelPath(config_.turnPath);
-            turn_.policy.load(path);
-            if(turn_.policy.inputSize() != 69 * kHistorySize || turn_.policy.outputSize() != kPolicyJointCount)
+            turn_.load(path);
+            if(turn_.inputSize() != 69 * kHistorySize || turn_.outputSize() != kPolicyJointCount)
                 throw runtime_error("turn policy must be 690 -> 20");
             turnReady_ = true;
             RCLCPP_INFO(get_logger(), "loaded turn model: %s", path.c_str());
@@ -237,6 +339,45 @@ private:
 
     string modelPath(const string& fileName) const {
         return ament_index_cpp::get_package_share_directory("motion") + "/models/" + fileName;
+    }
+
+    static double wrapAngle(double angle) {
+        while(angle > kPi) angle -= 2 * kPi;
+        while(angle < -kPi) angle += 2 * kPi;
+        return angle;
+    }
+
+    Eigen::VectorXd odomFrame() const {
+        Eigen::VectorXd frame = Eigen::VectorXd::Zero(39);
+        for(int i = 0; i < 3; ++i) {
+            frame[9 + i] = lowState_.imu_state.gyro[i];
+            frame[12 + i] = lowState_.imu_state.acc[i];
+        }
+        for(int i = 0; i < 12; ++i) {
+            frame[15 + i] = lowState_.motor_state_serial[10 + i].q;
+            frame[27 + i] = lowState_.motor_state_serial[10 + i].dq;
+        }
+        return frame;
+    }
+
+    void updateOdom() {
+        const Eigen::Quaterniond orientation =
+            Eigen::AngleAxisd(lowState_.imu_state.rpy[2], Eigen::Vector3d::UnitZ()) *
+            Eigen::AngleAxisd(lowState_.imu_state.rpy[1], Eigen::Vector3d::UnitY()) *
+            Eigen::AngleAxisd(lowState_.imu_state.rpy[0], Eigen::Vector3d::UnitX());
+        const Eigen::VectorXd window = odomState_.observation.push(odomFrame(), orientation);
+        // VisualKick 与普通走路的接触节奏不同，里程计模型由 Motion 按当前控制模式选择。
+        const unsigned slot = !runtime_.manualControl && brain_.kick.active ? 1 : 0;
+        const Eigen::Vector2d delta = odomModels_[slot].infer(window);
+        const double yaw = odomState_.observation.firstYaw();
+        const double c = cos(yaw), s = sin(yaw);
+        odomState_.position.x() += c * delta.x() - s * delta.y();
+        odomState_.position.y() += s * delta.x() + c * delta.y();
+        booster_interface::msg::Odometer message;
+        message.x = odomState_.position.x();
+        message.y = odomState_.position.y();
+        message.theta = odomState_.observation.currentYaw();
+        odomPublisher_->publish(message);
     }
 
     void controller(const booster_interface::msg::RemoteControllerState& joy) {
@@ -298,14 +439,13 @@ private:
         return abs(move.forward) < 0.01 && abs(move.left) < 0.01 && abs(move.turn) >= 0.01;
     }
 
-    PolicyContext* selectWalkPolicy(const motion::msg::MoveRequest& move, int& selectedSlot) {
+    motion::Policy* selectWalkPolicy(const motion::msg::MoveRequest& move) {
         const int requestedSlot = move.walk_slot;
         if(requestedSlot == kDefaultWalkSlot && isTurnOnly(move) && turnReady_) {
-            selectedSlot = kTurnWalkSlot;
             return &turn_;
         }
 
-        selectedSlot = requestedSlot == kDefaultWalkSlot ? 0 : requestedSlot;
+        const int selectedSlot = requestedSlot == kDefaultWalkSlot ? 0 : requestedSlot;
         if(selectedSlot < 0 || selectedSlot >= static_cast<int>(walkPolicies_.size())
            || !walkReady_[selectedSlot]) {
             RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000,
@@ -333,7 +473,8 @@ private:
         return frame;
     }
 
-    Eigen::VectorXd runWalk(const Eigen::VectorXd& shared, PolicyContext& policy) {
+    Eigen::VectorXd runWalk(motion::Policy& policy) {
+        const Eigen::VectorXd shared = sharedFrame(walkObservation_.lastAction);
         Eigen::VectorXd frame(69);
         // exported_policy_k1 的每一帧顺序固定为：角速度、重力、速度命令、关节状态、上次动作。
         // 速度命令必须放在第 6..8 位，不能简单追加到 66 维共享观测末尾。
@@ -343,25 +484,32 @@ private:
         frame[7] = move.left;
         frame[8] = move.turn;
         frame.segment(9, 60) = shared.segment(6, 60);
-        frame = policy.history.push(frame).cwiseMax(-100).cwiseMin(100);
-        policy.lastAction = policy.policy.run(frame).cwiseMax(-100).cwiseMin(100);
-        return policy.lastAction;
+        frame = walkObservation_.history.push(frame).cwiseMax(-100).cwiseMin(100);
+        const MotionTiming::Time start = MotionTiming::Clock::now();
+        walkObservation_.lastAction = policy.run(frame).cwiseMax(-100).cwiseMin(100);
+        timing_.inference.add(MotionTiming::elapsed(start, MotionTiming::Clock::now()));
+        return walkObservation_.lastAction;
     }
 
     Eigen::VectorXd runKick(const Eigen::VectorXd& shared, PolicyContext& policy) {
         Eigen::VectorXd frame(71);
         frame.segment(0, 66) = shared;
         const double strength = max(0.0, brain_.kick.power);
-        const double distance = hypot(brain_.kick.x, brain_.kick.y);
+        // 偏移只校准踢球模型看到的球位，不回写感知数据；在归一化前加上。
+        const double ballX = brain_.kick.x + config_.kickBallOffset[0];
+        const double ballY = brain_.kick.y + config_.kickBallOffset[1];
+        const double distance = hypot(ballX, ballY);
         const double ballScale = 2.0 / max(distance, 2.0);
         frame[66] = cos(brain_.kick.direction) * strength;
         frame[67] = sin(brain_.kick.direction) * strength;
-        frame[68] = brain_.kick.x * ballScale;
-        frame[69] = brain_.kick.y * ballScale;
+        frame[68] = ballX * ballScale;
+        frame[69] = ballY * ballScale;
         // 当前 Kick138 的实机基准没有接入遮挡语义，固定认为球可见。
         frame[70] = 1.0;
         frame = policy.history.push(frame).cwiseMax(-100).cwiseMin(100);
+        const MotionTiming::Time start = MotionTiming::Clock::now();
         policy.lastAction = policy.policy.run(frame).cwiseMax(-10).cwiseMin(10);
+        timing_.inference.add(MotionTiming::elapsed(start, MotionTiming::Clock::now()));
         return policy.lastAction;
     }
 
@@ -455,13 +603,11 @@ private:
             return;
         }
         if(runtime_.mode == Running && runtime_.manualControl == manualControl) return;
-        for(size_t i = 0; i < walkPolicies_.size(); ++i) walkPolicies_[i].reset();
-        turn_.reset();
+        walkObservation_.reset();
         target_ = defaultPose();
         runtime_.controlSteps = 0;
         runtime_.manualControl = manualControl;
         runtime_.activeKickSlot = -1;
-        runtime_.activeWalkSlot = -3;
         runtime_.mode = Running;
         RCLCPP_INFO(get_logger(), manualControl ? "walk control switched to controller" : "walk control switched to Brain");
     }
@@ -494,22 +640,18 @@ private:
                 kickPolicies_[slot].reset();
                 runtime_.activeKickSlot = slot;
             }
-            runtime_.activeWalkSlot = -3;
             target_ = targetFor(runKick(sharedFrame(kickPolicies_[slot].lastAction), kickPolicies_[slot]));
             return;
         }
+        // 踢球与 walk 的观测不同，返回 walk 时重新开始；walk 模型之间直接续用。
+        if(runtime_.activeKickSlot >= 0) walkObservation_.reset();
         runtime_.activeKickSlot = -1;
-        int selectedSlot = 0;
-        PolicyContext* policy = selectWalkPolicy(appliedMove_, selectedSlot);
+        motion::Policy* policy = selectWalkPolicy(appliedMove_);
         if(!policy) {
             target_ = defaultPose();
             return;
         }
-        if(runtime_.activeWalkSlot != selectedSlot) {
-            policy->reset();
-            runtime_.activeWalkSlot = selectedSlot;
-        }
-        target_ = targetFor(runWalk(sharedFrame(policy->lastAction), *policy));
+        target_ = targetFor(runWalk(*policy));
     }
 
     void tick() {
@@ -533,7 +675,7 @@ private:
             pending_.selectManual = false;
             selectWalkControl(true);
         }
-        if(runtime_.mode != Running || !hasWalkModel() || !runtime_.hasLowState) return;
+        if(!runtime_.hasLowState) return;
         if(lowState_.motor_state_serial.size() != kJointCount) {
             RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 2000,
                                   "serial low state needs %d joints, got %zu", kJointCount,
@@ -541,6 +683,10 @@ private:
             return;
         }
         if(runtime_.controlSteps++ % kPolicyControlSteps == 0) {
+            updateOdom();
+        }
+        if(runtime_.mode != Running || !hasWalkModel()) return;
+        if((runtime_.controlSteps - 1) % kPolicyControlSteps == 0) {
             updateAppliedMove();
             updateTarget();
         }
@@ -550,9 +696,10 @@ private:
     vector<bool> kickReady_;
     booster_interface::msg::LowState lowState_;
     vector<bool> walkReady_;
-    vector<PolicyContext> walkPolicies_;
+    vector<motion::Policy> walkPolicies_;
     bool turnReady_ = false;
-    PolicyContext turn_;
+    motion::Policy turn_;
+    vector<motion::OdomModel> odomModels_;
     vector<PolicyContext> kickPolicies_;
     Eigen::VectorXd target_;
     rclcpp::Subscription<booster_interface::msg::LowState>::SharedPtr lowStateSub_;
@@ -561,6 +708,7 @@ private:
     rclcpp::Subscription<motion::msg::KickRequest>::SharedPtr kickSub_;
     rclcpp::Subscription<booster_interface::msg::RemoteControllerState>::SharedPtr controllerSub_;
     rclcpp::Publisher<booster_interface::msg::LowCmd>::SharedPtr jointPublisher_;
+    rclcpp::Publisher<booster_interface::msg::Odometer>::SharedPtr odomPublisher_;
     rclcpp::Publisher<booster_msgs::msg::RpcReqMsg>::SharedPtr modePublisher_;
     rclcpp::TimerBase::SharedPtr timer_;
 };
