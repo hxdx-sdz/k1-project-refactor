@@ -97,7 +97,7 @@ public:
         motion.forward = 0;
         motion.left = 0;
         motion.turn = strategy_.skill == Strategy::FindBall ? config_.searchTurn : 0;
-        kick.active = strategy_.skill == Strategy::VisualKick && potential_.valid;
+        kick.active = strategy_.skill == Strategy::Dribble && potential_.valid;
         if(kick.active) {
             kick.modelSlot = 0;
             // Potential 给出的是场地坐标系中的出球方向；踢球接口需要机器人坐标系。

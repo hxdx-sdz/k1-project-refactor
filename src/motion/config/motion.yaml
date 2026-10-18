@@ -1,29 +1,36 @@
 motion_node:
   ros__parameters:
     Motion:
-      # A 进入 Custom；B 选择 Brain 控制，X 选择手柄控制。
+      # 控制开关：A 进入 Custom；B 选择 Brain，X 选择手柄。
       enabled: true
+
+      # 速度上限：平移 m/s，转向 rad/s。
       max_forward: 1.25
       max_backward: 0.5
       max_left: 0.5
       max_turn: 1.5
-      # 速度命令每 20 ms 更新；以下单位是 m/s²、m/s²、rad/s²。
+
+      # 加速度缓冲：平移 m/s²，转向 rad/s²。
       forward_acceleration: 1.3
       forward_deceleration: 2.0
       left_acceleration: 1.2
       left_deceleration: 1.2
       turn_acceleration: 2.0
       turn_deceleration: 2.0
-      # 踢球模型的球位补偿 [x, y]，单位米；本体坐标 +x 向前、+y 向左。
+
+      # 球位补偿：本体坐标 [x, y]，单位米；向前、向左为正。
       kick_ball_offset: [0.0, 0.0]
-      # 下标 0 是普通走路；VisualKick 请求 odom_slot=1。
-      odom_models:
-        - K1_odom_model_20260128_152713
-        - K1_odom_model_visionkick
-      # 下标由 MoveRequest.walk_slot 指定；-1 使用 turn/walk 的默认路由。
+
+      # 走路模型：walk_slot 指定槽位；-1 自动选择原地转向或普通走路。
       walk_models:
         - exported_policy_k1.bin
       turn_model: exported_policy_k1_turn.bin
-      # 下标 0 对应 KickRequest.model_slot=0。
+
+      # 踢球模型：KickRequest.model_slot 指定槽位。
       kick_models:
         - k1_kick_policy_138_v1.bin
+
+      # 里程计模型：槽位 0 走路、1 踢球，由 Motion 内部选择。
+      odom_models:
+        - K1_odom_model_20260128_152713
+        - K1_odom_model_visionkick

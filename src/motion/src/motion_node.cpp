@@ -366,7 +366,7 @@ private:
             Eigen::AngleAxisd(lowState_.imu_state.rpy[1], Eigen::Vector3d::UnitY()) *
             Eigen::AngleAxisd(lowState_.imu_state.rpy[0], Eigen::Vector3d::UnitX());
         const Eigen::VectorXd window = odomState_.observation.push(odomFrame(), orientation);
-        // VisualKick 与普通走路的接触节奏不同，里程计模型由 Motion 按当前控制模式选择。
+        // Dribble 与普通走路的接触节奏不同，里程计模型由 Motion 按当前控制模式选择。
         const unsigned slot = !runtime_.manualControl && brain_.kick.active ? 1 : 0;
         const Eigen::Vector2d delta = odomModels_[slot].infer(window);
         const double yaw = odomState_.observation.firstYaw();

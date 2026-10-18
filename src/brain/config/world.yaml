@@ -35,7 +35,7 @@ brain_node:
       # 新视觉位置以此比例混入；短暂漏检仍沿用最后一份可靠球状态。
       position_smoothing: 0.35
       hold_duration: 0.3
-      # 首次看到球不立刻进入视觉踢球，连续看到两帧后才确认。
+      # 首次看到球不立刻进入带球，连续看到两帧后才确认。
       confirm_frames: 2
 
     FieldPotential:
@@ -46,10 +46,10 @@ brain_node:
       corner_weight: 0.5
 
     Strategy:
-      # 看到球立即进入 Visual Kick；短暂漏检时不退出，避免动作模式反复切换。
-      visual_kick_exit_delay: 1.0
+      # 看到确认后的球进入 Dribble；短暂漏检时不退出，避免动作模式反复切换。
+      dribble_exit_delay: 1.0
       # 退出后需等待一小段时间才能再次进入，给底层动作控制器稳定退出的窗口。
-      visual_kick_exit_cooldown: 2.0
+      dribble_exit_cooldown: 2.0
 
     Skill:
       local_ball_hold: 2.0
