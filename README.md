@@ -40,7 +40,7 @@ Odometry, JointData, VisionState, FieldLines, GameState, HeadPose, RecoveryState
           ↓
 SelfState + Observations + FieldModel ─→ Localization
 Observations ──────────────────────────→ BallState
-FieldModel + Localization + BallState ─→ FieldPotential
+FieldModel + Localization + BallState + Observations ─→ FieldPotential
 BallState ─────────────────────────────→ Strategy
 Strategy + BallState + FieldPotential ─→ Skill
 Skill ─────────────────────────────────→ Actuation ─→ motion topics
@@ -53,7 +53,7 @@ Skill ────────────────────────�
 - **FieldProvider**：唯一的场地尺寸和理论标线来源。
 - **Localization**：维护机器人到场地坐标系的位姿估计。
 - **BallState**：对球观测做确认、平滑和短时保持，避免单帧漏检直接扰动策略。
-- **FieldPotential**：只计算场地偏好和建议出球方向，不决定是否踢球。
+- **FieldPotential**：计算场地偏好、近处机器人/人员斥力和建议出球方向，不决定是否踢球，也不代替身体路径规划。
 - **Strategy**：选择当前高层 Skill，例如找球（FindBall）或带球（Dribble）。
 - **Skill**：将 Strategy 翻译成头部、移动和踢球请求。
 - **Actuation**：Brain 与运控包之间的薄适配层，只转发请求，不保存动作状态机。
@@ -86,6 +86,8 @@ Motion：如何把请求变成身体关节目标？
 `KickRequest` 包含球相对位置、出球方向和 `model_slot`。`model_slot` 是策略明确选择的模型槽位；Motion 不应暗中根据 power 或其他启发式重新路由模型。
 
 Motion 当前兼容官方导出的行走模型 `exported_policy_k1.bin`、原地转向模型与 Kick138 模型 `k1_kick_policy_138_v1.bin`。它不复刻旧 Demo 的高层 VisualKick RPC，而是通过 Custom 接管、站立准备和低层关节输出运行模型。当前带球技能统一叫 Dribble，底层模型文件与协议名称保持兼容。
+
+踢球默认 slot 0 保留 Kick138，slot 1/2 分别为 B-Human 2026 的 K1 `kick_inner` / `kick_inner_soft`。两者使用独立的 59 维观测与 12 腿关节输出适配，复用现有 Eigen 推理；Brain 当前临时统一选择 slot 1。来源许可见 `src/motion/models/BHuman-LICENSE.md`。
 
 低层输出具有实机风险。当前随包配置为 `Motion.enabled: true`，但仍需手柄 A 进入 Custom，B 选择 Brain 控制，X 选择手柄控制；Start 退出到 Walking，Back 切到 Damping。不要把“启动节点”与“允许机器人运动”混为一谈；测试前确认周围安全与退出方式。
 
@@ -172,7 +174,7 @@ src/
 
 ### P2：扩展比赛能力
 
-- [ ] **对手状态与避障**：当前只有物体观测，尚无稳定的障碍物状态、路径避障或势能场对手项。
+- [ ] **对手状态与路径避障**：已将机器人/人员观测接入出球势能的近距离斥力；尚无障碍物跟踪和身体路径避障，势能项仍需实机验证。
 - [ ] **角色与团队协作**：对齐 `StrikerDecide`、`GoalieDecide`、`RoleSwitchIfNeeded`、`Assist` 的职责，按需要加入抢球分工、协作和守门能力。
 - [ ] **专用技能**：按比赛需要补齐 `Intercept`、守门封堵、绕球调整和独立射门等能力，不把 Dribble 等同于完整追球/调整/射门策略。
 

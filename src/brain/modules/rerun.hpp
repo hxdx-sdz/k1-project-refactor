@@ -360,16 +360,7 @@ private:
 
     void logLocalization() {
         if(!localization_.valid) {
-            if(now_ < nextLocalizationLog_) return;
-            const FieldDimensions& f = field_.dimensions;
-            const float statusX = static_cast<float>(-f.length / 2 + 0.4);
-            const float statusY = static_cast<float>( f.width / 2 - 0.9);
-            stream_.log("field/localization",
-                        rerun::Boxes2D::from_mins_and_sizes(
-                            {{statusX, statusY}}, {{4.0f, 0.5f}})
-                        .with_labels({"Localization: " + localization_.status})
-                        .with_colors({0xD55E00FF}));
-            nextLocalizationLog_ = now_ + 1.0;
+            stream_.log("field/localization", rerun::Clear::FLAT);
             return;
         }
         const Pose2D& pose = localization_.poseToField;
@@ -383,8 +374,7 @@ private:
         stream_.log("field/localization",
                     rerun::LineStrips2D(lines)
                         .with_radii({0.02f})
-                        .with_colors({rerun::Color(0x00FF66FF)})
-                        .with_labels({"Localization"}));
+                        .with_colors({rerun::Color(0x00FF66FF)}));
     }
 
     // 场地图沿用 Rerun 的 y 轴翻转；球和箭头都来自 FieldPotential 的全局输出。
@@ -398,8 +388,7 @@ private:
         stream_.log("field/ball",
                     rerun::Points2D({{static_cast<float>(ball.x), static_cast<float>(-ball.y)}})
                         .with_radii({0.12f})
-                        .with_colors({rerun::Color(0xFFB000FF)})
-                        .with_labels({"Ball"}));
+                        .with_colors({rerun::Color(0xFFB000FF)}));
 
         const double length = 1.2;
         const double endX = ball.x + length * cos(fieldPotential_.directionToField);
@@ -421,8 +410,7 @@ private:
         stream_.log("field/kick_dir",
                     rerun::LineStrips2D(lines)
                         .with_radii({0.04f})
-                        .with_colors({rerun::Color(0x00D5FFFF)})
-                        .with_labels({"KickDir"}));
+                        .with_colors({rerun::Color(0x00D5FFFF)}));
     }
 
     const FieldModel& field_;
@@ -442,7 +430,6 @@ private:
     string schedule_;
     bool graphLogged_ = false;
     bool fieldLogged_ = false;
-    double nextLocalizationLog_ = 0;
     rerun::RecordingStream stream_;
 };
 

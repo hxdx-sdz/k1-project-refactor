@@ -1,5 +1,6 @@
 #include "motion/policy.hpp"
 #include "motion/odom.hpp"
+#include "motion/bhuman_kick.hpp"
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <booster_interface/message_utils.hpp>
 #include <booster_interface/msg/low_cmd.hpp>
@@ -29,6 +30,7 @@ const int kHistorySize = 10;
 const int kControlIntervalMs = 2;
 const int kPolicyControlSteps = 10;
 const int kBrainMoveTimeoutMs = 250;
+const int kKickBallTimeoutMs = 250;
 const int kDefaultWalkSlot = -1;
 const double kPi = 3.14159265358979323846;
 
@@ -54,12 +56,18 @@ Eigen::Vector3d projectedGravity(const booster_interface::msg::ImuState& imu) {
     return Eigen::Vector3d(sin(pitch), -cos(pitch) * sin(roll), -cos(pitch) * cos(roll));
 }
 
-struct PolicyContext {
-    explicit PolicyContext(int frameSize) : history(frameSize), lastAction(Eigen::VectorXd::Zero(kPolicyJointCount)) {}
+enum KickType { Kick138, BHumanInner, BHumanSoft };
 
+struct PolicyContext {
+    explicit PolicyContext(KickType modelType)
+        : type(modelType), history(modelType == Kick138 ? 71 : 0),
+          lastAction(Eigen::VectorXd::Zero(kPolicyJointCount)) {}
+
+    KickType type;
     motion::Policy policy;
     motion::History history;
     Eigen::VectorXd lastAction;
+    motion::BHumanKick bhuman;
 
     void reset() {
         history.clear();
@@ -132,11 +140,22 @@ public:
         config_.walkPaths = declare_parameter<vector<string> >("Motion.walk_models", vector<string>());
         config_.turnPath = declare_parameter<string>("Motion.turn_model", "");
         config_.kickPaths = declare_parameter<vector<string> >("Motion.kick_models", vector<string>());
+        const vector<string> kickTypes = declare_parameter<vector<string> >(
+            "Motion.kick_model_types", vector<string>());
+        if(kickTypes.size() != config_.kickPaths.size())
+            throw invalid_argument("Motion.kick_model_types must match Motion.kick_models slot count");
 
         for(size_t i = 0; i < config_.odomPaths.size(); ++i)
             odomModels_.push_back(motion::OdomModel(motion::k1Odom20260128Calibration()));
         walkPolicies_.resize(config_.walkPaths.size());
-        for(size_t i = 0; i < config_.kickPaths.size(); ++i) kickPolicies_.push_back(PolicyContext(71));
+        for(size_t i = 0; i < kickTypes.size(); ++i) {
+            KickType type;
+            if(kickTypes[i] == "kick138") type = Kick138;
+            else if(kickTypes[i] == "bhuman_inner") type = BHumanInner;
+            else if(kickTypes[i] == "bhuman_soft") type = BHumanSoft;
+            else throw invalid_argument("unknown Motion.kick_model_types entry: " + kickTypes[i]);
+            kickPolicies_.push_back(PolicyContext(type));
+        }
         loadModels();
 
         lowStateSub_ = create_subscription<booster_interface::msg::LowState>(
@@ -153,7 +172,17 @@ public:
         headSub_ = create_subscription<motion::msg::HeadRequest>(
             "/motion/head_request", 1, [this](const motion::msg::HeadRequest::SharedPtr msg) { brain_.head = *msg; });
         kickSub_ = create_subscription<motion::msg::KickRequest>(
-            "/motion/kick_request", 1, [this](const motion::msg::KickRequest::SharedPtr msg) { brain_.kick = *msg; });
+            "/motion/kick_request", 1, [this](const motion::msg::KickRequest::SharedPtr msg) {
+                const chrono::steady_clock::time_point now = chrono::steady_clock::now();
+                const double dt = chrono::duration<double>(now - brain_.kickReceived).count();
+                brain_.kickVelocity.setZero();
+                // 按请求实际到达间隔差分原始球位，不对模型限幅后的球位求导。
+                if(msg->active && brain_.kick.active && msg->model_slot == brain_.kick.model_slot
+                   && dt > 0 && dt <= kKickBallTimeoutMs / 1000.0)
+                    brain_.kickVelocity = Eigen::Vector2d(msg->x - brain_.kick.x, msg->y - brain_.kick.y) / dt;
+                brain_.kick = *msg;
+                brain_.kickReceived = now;
+            });
         controllerSub_ = create_subscription<booster_interface::msg::RemoteControllerState>(
             "/remote_controller_state", 1,
             [this](const booster_interface::msg::RemoteControllerState::SharedPtr msg) { controller(*msg); });
@@ -218,6 +247,8 @@ private:
         motion::msg::MoveRequest move;
         motion::msg::HeadRequest head;
         motion::msg::KickRequest kick;
+        Eigen::Vector2d kickVelocity = Eigen::Vector2d::Zero();
+        chrono::steady_clock::time_point kickReceived;
         chrono::steady_clock::time_point moveReceived;
         bool hasMove = false;
     } brain_;
@@ -327,10 +358,14 @@ private:
         for(size_t i = 0; i < kickPolicies_.size(); ++i) {
             try {
                 kickPolicies_[i].policy.load(modelPath(config_.kickPaths[i]));
-                if(kickPolicies_[i].policy.inputSize() != 71 * kHistorySize
-                   || kickPolicies_[i].policy.outputSize() != kPolicyJointCount)
-                    throw runtime_error("kick policy must be 710 -> 20");
+                const motion::Policy& policy = kickPolicies_[i].policy;
+                const bool bhuman = kickPolicies_[i].type != Kick138;
+                if(policy.inputSize() != (bhuman ? 59 : 71 * kHistorySize)
+                   || policy.outputSize() != (bhuman ? 13 : kPolicyJointCount))
+                    throw runtime_error("kick policy layout does not match its model");
                 kickReady_[i] = true;
+                RCLCPP_INFO(get_logger(), "loaded kick slot %zu: %s (%d -> %d)", i,
+                            config_.kickPaths[i].c_str(), policy.inputSize(), policy.outputSize());
             } catch(const exception& error) {
                 RCLCPP_WARN(get_logger(), "kick slot %zu is unavailable: %s", i, error.what());
             }
@@ -526,6 +561,34 @@ private:
         return target;
     }
 
+    Eigen::Vector2d kickBall() const {
+        return Eigen::Vector2d(brain_.kick.x + config_.kickBallOffset[0],
+                               brain_.kick.y + config_.kickBallOffset[1]);
+    }
+
+    void runBHumanKick(PolicyContext& context) {
+        Eigen::VectorXd position(kJointCount), velocity(kJointCount);
+        for(int i = 0; i < kJointCount; ++i) {
+            position[i] = lowState_.motor_state_serial[i].q;
+            velocity[i] = lowState_.motor_state_serial[i].dq;
+        }
+        const Eigen::Vector3d gyro(lowState_.imu_state.gyro[0], lowState_.imu_state.gyro[1],
+                                    lowState_.imu_state.gyro[2]);
+        Eigen::Vector2d ballVelocity = brain_.kickVelocity;
+        if(chrono::steady_clock::now() - brain_.kickReceived > chrono::milliseconds(kKickBallTimeoutMs))
+            ballVelocity.setZero();
+        const Eigen::VectorXd input = context.bhuman.observation(
+            projectedGravity(lowState_.imu_state), gyro, position, velocity, target_, kickBall(),
+            ballVelocity,
+            brain_.kick.direction, brain_.kick.power, context.type == BHumanSoft);
+        const MotionTiming::Time start = MotionTiming::Clock::now();
+        const Eigen::VectorXd action = context.policy.run(input);
+        timing_.inference.add(MotionTiming::elapsed(start, MotionTiming::Clock::now()));
+        context.bhuman.apply(action, target_, kControlIntervalMs * kPolicyControlSteps / 1000.0);
+        target_[0] = brain_.head.yaw;
+        target_[1] = brain_.head.pitch;
+    }
+
     static bool isAnkleJoint(int joint) {
         return joint == 14 || joint == 15 || joint == 20 || joint == 21;
     }
@@ -550,6 +613,8 @@ private:
         booster_interface::msg::LowCmd command;
         command.cmd_type = booster_interface::msg::LowCmd::CMD_TYPE_SERIAL;
         command.motor_cmd.resize(kJointCount);
+        const bool bhuman = runtime_.mode == Running && runtime_.activeKickSlot >= 0
+                            && kickPolicies_[runtime_.activeKickSlot].type != Kick138;
         for(int i = 0; i < kJointCount; ++i) {
             auto& motor = command.motor_cmd[i];
             motor.q = target[i];
@@ -558,6 +623,11 @@ private:
             const JointGains joint = jointGains(i, gains);
             motor.kp = joint.kp;
             motor.kd = joint.kd;
+            if(bhuman && i < 2) {
+                motor.kp = 10;
+                motor.kd = 1.2;
+            }
+            if(bhuman && (i == 15 || i == 21)) motor.kp = 25;
             motor.weight = 1;
         }
         jointPublisher_->publish(command);
@@ -638,7 +708,12 @@ private:
             const int slot = brain_.kick.model_slot;
             if(runtime_.activeKickSlot != slot) {
                 kickPolicies_[slot].reset();
+                kickPolicies_[slot].bhuman.reset(kickBall());
                 runtime_.activeKickSlot = slot;
+            }
+            if(kickPolicies_[slot].type != Kick138) {
+                runBHumanKick(kickPolicies_[slot]);
+                return;
             }
             target_ = targetFor(runKick(sharedFrame(kickPolicies_[slot].lastAction), kickPolicies_[slot]));
             return;
@@ -690,7 +765,10 @@ private:
             updateAppliedMove();
             updateTarget();
         }
-        publishTarget(target_, runningGains());
+        GainProfile gains = runningGains();
+        if(runtime_.activeKickSlot >= 0 && kickPolicies_[runtime_.activeKickSlot].type != Kick138)
+            gains = {40, 1, 80, 4, 50, 2}; // B-Human K1 regular 电机参数；踝滚转单独处理。
+        publishTarget(target_, gains);
     }
 
     vector<bool> kickReady_;

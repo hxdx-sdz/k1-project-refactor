@@ -26,7 +26,7 @@ struct FieldModel {
     string detail() const {
         ostringstream out;
         out << fixed << setprecision(1) << "size=" << dimensions.length << 'x'
-            << dimensions.width << "m\nlines=" << lines.size();
+            << dimensions.width << "m";
         return out.str();
     }
 };

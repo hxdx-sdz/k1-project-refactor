@@ -11,7 +11,7 @@
 
 namespace motion {
 
-// Booster .bin 是四层 ELU MLP。这里直接读取其公开的 Eigen tensor 流，
+// Booster .bin 及转换后的 B-Human kick 都是四层 ELU MLP。这里直接读取 Eigen tensor 流，
 // 不引入 Torch、Python 或第二套运行时。
 class Policy {
 public:

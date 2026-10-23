@@ -31,9 +31,7 @@ struct Observations {
     string detail() const {
         ostringstream out;
         out << "markers=" << markers.size() << " balls=" << balls.size() << "\n"
-            << "robots=" << robots.size() << " lines=" << lines.size() << "\n"
-            << "detection_rev=" << detectionRevision << "\n"
-            << "line_rev=" << lineRevision;
+            << "robots=" << robots.size() << " lines=" << lines.size();
         return out.str();
     }
 };
@@ -77,7 +75,7 @@ public:
             object.range = hypot(x, y); object.yaw = atan2(y, x);
             object.pitch = atan2(config.robotHeight, object.range);
             if(object.label == "Ball") result.balls.push_back(object);
-            else if(object.label == "Opponent") result.robots.push_back(object);
+            else if(object.label == "Opponent" || object.label == "Person") result.robots.push_back(object);
             else if(object.label == "Goalpost" && object.confidence >= 50)
                 result.goalposts.push_back(object);
             char type = 0;

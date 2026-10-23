@@ -35,13 +35,10 @@ struct LocalizationState {
         ostringstream out;
         out << fixed << setprecision(2)
             << "status=" << status
-            << "\nvalid=" << valid
             << "\npose=(" << poseToField.x << ',' << poseToField.y << ','
             << poseToField.yaw << ')'
             << "\nresidual=" << ((lastAttempt.residual > 100) ? -1 : lastAttempt.residual)
-            << "\nattempts=" << attempts
-            << "\ncorrections=" << corrections << " line_corrections=" << lineCorrections
-            << "\nline_residual=" << lineResidual << " line_matches=" << lineMatches;
+            << "\nsuccess " << corrections << " / " << attempts;
         return out.str();
     }
 };

@@ -20,11 +20,10 @@ struct BallState {
     double seenAt = 0;
 
     string detail() const {
+        if(!visible) return "not visible";
         ostringstream out;
-        out << fixed << setprecision(2) << "visible=" << visible;
-        if(visible)
-            out << "\nrange=" << ball.range << " yaw=" << ball.yaw
-                << "\nconfidence=" << ball.confidence;
+        out << lround(ball.yaw * 180 / 3.141592653589793) << "° "
+            << fixed << setprecision(2) << ball.range << "m";
         return out.str();
     }
 };

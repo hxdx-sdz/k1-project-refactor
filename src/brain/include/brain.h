@@ -79,7 +79,7 @@ private:
     ObservationModule observations_{frame_.vision, frame_.fieldLines};
     LocalizationModule localization_{field_.output, self_.output, observations_.output, frame_.now};
     BallStateModule ball_{observations_.output, frame_.now};
-    FieldPotentialModule fieldPotential_{field_.output, localization_.output, ball_.output};
+    FieldPotentialModule fieldPotential_{field_.output, localization_.output, ball_.output, observations_.output};
     StrategyModule strategy_{ball_.output, frame_.now};
     SkillModule skill_{strategy_.output, ball_.output, localization_.output,
                        fieldPotential_.output, self_.output, frame_.now};

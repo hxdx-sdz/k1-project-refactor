@@ -21,10 +21,7 @@ struct SelfState {
         ostringstream out;
         out << fixed << setprecision(2)
             << "odom=(" << odometry.value.x << ',' << odometry.value.y << ','
-            << odometry.value.yaw << ")\nhead=";
-        if(headAnglesValid) out << '(' << headYaw << ',' << headPitch << ')';
-        else out << "waiting";
-        out << "\nrecovery=";
+            << odometry.value.yaw << ")\nrecovery=";
         if(recovery.valid()) out << recovery.value.state << " planner=" << recovery.value.planner;
         else out << "waiting";
         return out.str();

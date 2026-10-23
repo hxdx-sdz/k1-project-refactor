@@ -46,7 +46,7 @@ struct MotionRequest {
 
 struct KickRequest {
     bool active = false;
-    unsigned modelSlot = 0;
+    unsigned modelSlot = 1; // 临时统一使用 BHuman inner；恢复 Kick138 时改回 0。
     double x = 0, y = 0;
     double direction = 0;
     double power = 2;
@@ -55,7 +55,6 @@ struct KickRequest {
         ostringstream out;
         out << fixed << setprecision(2) << "active=" << active
             << " slot=" << modelSlot
-            << " ball=(" << x << ',' << y << ")"
             << "\ndir=" << direction << " power=" << power;
         return out.str();
     }
@@ -97,13 +96,17 @@ public:
         motion.forward = 0;
         motion.left = 0;
         motion.turn = strategy_.skill == Strategy::FindBall ? config_.searchTurn : 0;
-        kick.active = strategy_.skill == Strategy::Dribble && potential_.valid;
+        const bool active = strategy_.skill == Strategy::Dribble && potential_.valid;
+        // 一次动作只选一次方向，用里程计保存朝向，避开定位修正造成的跳变。
+        if(active && !kick.active)
+            kickDirectionToOdom_ = wrapAngle(potential_.directionToField
+                - localization_.poseToField.yaw + self_.odometry.value.yaw);
+        kick.active = active;
         if(kick.active) {
-            kick.modelSlot = 0;
-            // Potential 给出的是场地坐标系中的出球方向；踢球接口需要机器人坐标系。
+            // 方向锁定，但机器人转身后，传给模型的本体相对角仍需更新。
             kick.x = ball_.ball.relative.x;
             kick.y = ball_.ball.relative.y;
-            kick.direction = wrapAngle(potential_.directionToField - localization_.poseToField.yaw);
+            kick.direction = wrapAngle(kickDirectionToOdom_ - self_.odometry.value.yaw);
             kick.power = 2;
         }
     }
@@ -220,6 +223,7 @@ private:
     const SelfState& self_;
     const double& now_;
     Config config_;
+    double kickDirectionToOdom_ = 0;
 };
 
 }

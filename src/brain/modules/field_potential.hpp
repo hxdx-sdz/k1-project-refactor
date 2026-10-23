@@ -1,6 +1,7 @@
 #pragma once
 
 #include "modules/ball_state.hpp"
+#include "modules/observations.hpp"
 #include "modules/field_provider.hpp"
 #include "modules/localization.hpp"
 #include "common/module.h"
@@ -15,6 +16,19 @@ using namespace std;
 
 // directionToField 是势场下降方向 = 应该朝哪个（全局）方向踢
 struct FieldPotential {
+    // 与出球计算一致，记录各分项的负梯度；极坐标角度属于场地坐标系，模长不是距离。
+    struct Gradient {
+        double x = 0, y = 0;
+
+        string detail() const {
+            if(x == 0 && y == 0) return "0.00";
+            ostringstream out;
+            out << lround(atan2(y, x) * 180 / 3.141592653589793) << "° "
+                << fixed << setprecision(2) << hypot(x, y);
+            return out.str();
+        }
+    };
+
     bool valid = false;
     Pose2D ballToField;
     double directionToField = 0;
@@ -22,16 +36,16 @@ struct FieldPotential {
     double borderScore = 0;
     double goalScore = 0;
     double cornerScore = 0;
+    double obstacleScore = 0;
+    Gradient borderGradient, goalGradient, cornerGradient, obstacleGradient;
 
     string detail() const {
+        if(!valid) return "unavailable";
         ostringstream out;
-        out << fixed << setprecision(2) << "valid=" << valid;
-        if(valid) {
-            out << "\nball=(" << ballToField.x << ',' << ballToField.y << ')'
-                << "\ndirection=" << directionToField << " score=" << score
-                << "\nborder=" << borderScore << " goal=" << goalScore
-                << " corner=" << cornerScore;
-        }
+        out << "border=" << borderGradient.detail()
+            << "\ngoal=" << goalGradient.detail()
+            << "\ncorner=" << cornerGradient.detail()
+            << "\nobstacle=" << obstacleGradient.detail();
         return out.str();
     }
 };
@@ -49,13 +63,13 @@ public:
     };
 
     FieldPotentialModule(const FieldModel& field, const LocalizationState& localization,
-                         const BallState& ball)
-        : field_(field), localization_(localization), ball_(ball) {}
+                         const BallState& ball, const Observations& observations)
+        : field_(field), localization_(localization), ball_(ball), observations_(observations) {}
 
     FieldPotential output;
 
     ModuleInfo info() const override {
-        return {"FieldPotential", {"FieldModel", "LocalizationState", "BallState"},
+        return {"FieldPotential", {"FieldModel", "LocalizationState", "BallState", "Observations"},
                 {"FieldPotential"}};
     }
 
@@ -89,9 +103,12 @@ public:
         if(abs(output.ballToField.y) > f.goalWidth / 2)
             addBorder(halfLength - output.ballToField.x, -1, 0, forceX, forceY);
 
+        output.borderGradient.x = forceX;
+        output.borderGradient.y = forceY;
         addGoalForce(halfLength, forceX, forceY);
         addCornerForce(halfLength, forceX, forceY);
-        output.score = output.borderScore + output.goalScore + output.cornerScore;
+        addObstacleForce(forceX, forceY);
+        output.score = output.borderScore + output.goalScore + output.cornerScore + output.obstacleScore;
         if(forceX != 0 || forceY != 0) output.directionToField = atan2(forceY, forceX);
     }
 
@@ -113,8 +130,10 @@ private:
         const double range = hypot(field_.dimensions.length, field_.dimensions.width);
         output.goalScore = -config_.goalWeight * max(0.0, 1.0 - distance / range);
         if(distance > 0) {
-            forceX += dx / distance * config_.goalWeight / range;
-            forceY += dy / distance * config_.goalWeight / range;
+            output.goalGradient.x = dx / distance * config_.goalWeight / range;
+            output.goalGradient.y = dy / distance * config_.goalWeight / range;
+            forceX += output.goalGradient.x;
+            forceY += output.goalGradient.y;
         }
     }
 
@@ -125,12 +144,36 @@ private:
         const double ratio = (output.ballToField.x - cornerStart) / f.penaltyAreaLength;
         output.cornerScore = config_.cornerWeight * ratio * ratio;
         const double strength = 2 * config_.cornerWeight * ratio / f.penaltyAreaLength;
+        output.cornerGradient.x = -strength;
         forceX -= strength;
+    }
+
+    void addObstacleForce(double& forceX, double& forceY) {
+        // 在球周围 1 米内形成平滑斥力，边缘处势能和梯度均归零。
+        // 只改变建议出球方向，不代表机器人身体已经具备路径避障。
+        const double range = 1.0;
+        const double weight = 1.5;
+        for(const ObservedObject& obstacle : observations_.robots) {
+            if(obstacle.confidence < 50) continue;
+            const Pose2D position = compose(localization_.poseToField, obstacle.relative);
+            const double dx = output.ballToField.x - position.x;
+            const double dy = output.ballToField.y - position.y;
+            const double distanceSquared = dx * dx + dy * dy;
+            if(distanceSquared >= range * range) continue;
+            const double ratio = 1 - distanceSquared / (range * range);
+            output.obstacleScore += weight * ratio * ratio;
+            const double strength = 4 * weight * ratio / (range * range);
+            output.obstacleGradient.x += strength * dx;
+            output.obstacleGradient.y += strength * dy;
+        }
+        forceX += output.obstacleGradient.x;
+        forceY += output.obstacleGradient.y;
     }
 
     const FieldModel& field_;
     const LocalizationState& localization_;
     const BallState& ball_;
+    const Observations& observations_;
     Config config_;
 };
 

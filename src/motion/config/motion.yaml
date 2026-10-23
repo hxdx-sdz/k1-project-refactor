@@ -29,6 +29,13 @@ motion_node:
       # 踢球模型：KickRequest.model_slot 指定槽位。
       kick_models:
         - k1_kick_policy_138_v1.bin
+        - K1_kick_inner.bin
+        - K1_kick_inner_soft.bin
+      # 与 kick_models 同下标：明确选择观测、动作和增益约定，文件名可自由修改。
+      kick_model_types:
+        - kick138
+        - bhuman_inner
+        - bhuman_soft
 
       # 里程计模型：槽位 0 走路、1 踢球，由 Motion 内部选择。
       odom_models:
